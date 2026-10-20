@@ -1,0 +1,1341 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Drone Sprayer Control & Camera Ground Station</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <!-- PeerJS WebRTC Library for Real-time Data & Video Streaming -->
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+    <!-- TensorFlow.js and Teachable Machine image classification -->
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/image@0.8.5/dist/teachablemachine-image.min.js"></script>
+    <!-- Optional Firebase Storage and Firestore integration -->
+    <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-storage-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js"></script>
+    <!-- WICG Web Serial Polyfill for Android browsers with WebUSB support -->
+    <script type="module">
+        window.serialPolyfillReady = import('https://unpkg.com/web-serial-polyfill@1.0.15/dist/serial.js')
+            .then(({ serial }) => {
+                window.serialPolyfill = serial;
+                return serial;
+            });
+    </script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+        code, pre { font-family: 'JetBrains Mono', monospace; }
+        .custom-scrollbar::-webkit-scrollbar { width: 6px; height: 6px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: rgba(15, 23, 42, 0.6); }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #334155; border-radius: 3px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #475569; }
+        .servo-dial { transition: transform 0.15s cubic-bezier(0.4, 0, 0.2, 1); }
+        @keyframes pulse-ring {
+            0% { transform: scale(0.95); opacity: 0.8; }
+            50% { transform: scale(1.05); opacity: 0.4; }
+            100% { transform: scale(0.95); opacity: 0.8; }
+        }
+        .hud-grid {
+            background-image: linear-gradient(rgba(14, 165, 233, 0.1) 1px, transparent 1px),
+                              linear-gradient(90deg, rgba(14, 165, 233, 0.1) 1px, transparent 1px);
+            background-size: 20px 20px;
+        }
+
+        .light-mode {
+            background-color: #f1f5f9 !important;
+            color: #0f172a !important;
+        }
+        .light-mode header,
+        .light-mode .bg-slate-900,
+        .light-mode .bg-slate-900\/80 {
+            background-color: #ffffff !important;
+        }
+        .light-mode .bg-slate-950,
+        .light-mode .bg-slate-950\/60,
+        .light-mode .bg-slate-950\/70 {
+            background-color: #e2e8f0 !important;
+        }
+        .light-mode .bg-slate-800,
+        .light-mode .bg-slate-800\/80 {
+            background-color: #cbd5e1 !important;
+        }
+        .light-mode .text-slate-100,
+        .light-mode .text-slate-200,
+        .light-mode .text-slate-300 {
+            color: #0f172a !important;
+        }
+        .light-mode .text-slate-400,
+        .light-mode .text-slate-500 {
+            color: #475569 !important;
+        }
+        .light-mode .text-slate-600 {
+            color: #64748b !important;
+        }
+        .light-mode .border-slate-800,
+        .light-mode .border-slate-700 {
+            border-color: #cbd5e1 !important;
+        }
+        .light-mode input {
+            color: #0f172a !important;
+            background-color: #f8fafc !important;
+        }
+        .light-mode .hud-grid {
+            background-image: linear-gradient(rgba(14, 165, 233, 0.16) 1px, transparent 1px),
+                              linear-gradient(90deg, rgba(14, 165, 233, 0.16) 1px, transparent 1px);
+        }
+    </style>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen flex flex-col selection:bg-cyan-500 selection:text-slate-950">
+
+    <header class="border-b border-slate-800 bg-slate-900/80 backdrop-blur-md sticky top-0 z-50">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3.5 flex flex-wrap items-center justify-between gap-4">
+            <div class="flex items-center space-x-3">
+                <div class="p-2 bg-gradient-to-tr from-cyan-500 to-blue-600 rounded-xl shadow-lg shadow-cyan-500/20">
+                    <i data-lucide="droplet" class="w-6 h-6 text-slate-950 stroke-[2.5]"></i>
+                </div>
+                <div>
+                    <h1 class="font-bold text-lg text-slate-100 tracking-tight flex items-center gap-2">
+                        Project DART-BTi
+                        <span class="text-xs font-semibold px-2 py-0.5 rounded-full bg-cyan-950 text-cyan-400 border border-cyan-800/50">PeerJS Video + Data</span>
+                    </h1>
+                    <p class="text-xs text-slate-400">Multi-Device WebRTC Station & Diagnostics</p>
+                </div>
+            </div>
+
+            <div class="flex flex-wrap items-center gap-3">
+                <!-- PeerJS Connection Bar -->
+                <div class="flex items-center bg-slate-950 border border-slate-800 rounded-xl px-3 py-1 gap-2 text-xs">
+                    <span class="text-slate-400 font-mono">ID: <span id="myPeerId" class="text-cyan-400 font-bold">Connecting...</span></span>
+                    <button onclick="copyPeerId()" title="Copy Station ID" class="text-slate-400 hover:text-slate-200">
+                        <i data-lucide="copy" class="w-3.5 h-3.5"></i>
+                    </button>
+                    <div class="h-4 w-[1px] bg-slate-800"></div>
+                    <input id="remotePeerIdInput" type="text" placeholder="Enter Host ID..." class="bg-slate-900 border border-slate-700 text-slate-200 rounded px-2 py-0.5 text-xs w-28 focus:outline-none focus:border-cyan-500">
+                    <button onclick="connectToHost()" class="bg-cyan-600 hover:bg-cyan-500 text-slate-950 font-bold px-2 py-0.5 rounded transition-all">Join</button>
+                </div>
+
+                <!-- Sync Indicator -->
+                <div id="netStatusBadge" class="flex items-center space-x-1.5 px-2.5 py-1 rounded-full border bg-slate-800 border-slate-700 text-slate-400 text-xs">
+                    <span id="netStatusDot" class="w-2 h-2 rounded-full bg-slate-500"></span>
+                    <span id="netStatusText">Standalone</span>
+                </div>
+
+                <!-- Arming Safety Toggle -->
+                <button id="armToggleBtn" onclick="toggleArming()" class="flex items-center space-x-2 px-3 py-1.5 rounded-xl border bg-slate-800/80 border-slate-700 text-slate-300 text-xs font-semibold transition-all hover:bg-slate-700 active:scale-95">
+                    <i id="armIcon" data-lucide="shield-off" class="w-4 h-4 text-slate-400"></i>
+                    <span id="armText">SYSTEM DISARMED</span>
+                </button>
+
+                <!-- Serial Connection Badge -->
+                <button id="connectBtn" onclick="toggleConnection()" class="flex items-center space-x-2 px-4 py-1.5 bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-semibold rounded-xl text-xs transition-all shadow-md shadow-cyan-500/20 active:scale-95">
+                    <i data-lucide="usb" class="w-4 h-4"></i>
+                    <span id="connectBtnText">Connect USB</span>
+                </button>
+
+                <button id="themeToggleBtn" onclick="toggleTheme()" title="Switch to light mode" class="flex items-center justify-center w-8 h-8 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 rounded-xl transition-all">
+                    <i id="themeToggleIcon" data-lucide="sun" class="w-4 h-4"></i>
+                </button>
+            </div>
+        </div>
+    </header>
+
+    <main class="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 grid grid-cols-1 lg:grid-cols-12 gap-6">
+
+        <!-- Left Column: Camera Feed & Controls (7 cols) -->
+        <div class="lg:col-span-7 space-y-6">
+
+            <!-- Recon Viewfinder -->
+            <div class="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl relative overflow-hidden space-y-4">
+                <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+                    <div class="flex items-center space-x-2">
+                        <i data-lucide="video" class="w-5 h-5 text-cyan-400"></i>
+                        <h2 class="text-base font-semibold text-slate-200">Recon Viewfinder & Optical Tracking</h2>
+                    </div>
+                    <span id="camStatusBadge" class="text-xs font-mono px-2 py-0.5 rounded bg-slate-800 text-slate-400">OFFLINE</span>
+                </div>
+
+                <div class="relative w-full aspect-video bg-slate-950 rounded-xl overflow-hidden border border-slate-800 flex items-center justify-center">
+                    <video id="webcamVideo" autoplay playsinline muted class="w-full h-full object-cover hidden"></video>
+                    <canvas id="captureCanvas" class="hidden"></canvas>
+
+                    <div id="cameraStandby" class="flex flex-col items-center justify-center p-6 text-center space-y-3">
+                        <div class="p-4 bg-slate-900/80 rounded-full border border-slate-800 text-slate-600">
+                            <i data-lucide="camera-off" class="w-10 h-10"></i>
+                        </div>
+                        <p class="text-xs text-slate-400 max-w-xs">Local video feed. Start camera to broadcast live stream to connected peers.</p>
+                        <button onclick="startCamera()" class="px-3.5 py-1.5 bg-cyan-500 hover:bg-cyan-400 text-slate-950 text-xs font-bold rounded-lg shadow">Start Camera</button>
+                    </div>
+
+                    <div id="hudOverlay" class="absolute inset-0 pointer-events-none hud-grid hidden flex flex-col justify-between p-4">
+                        <div class="flex justify-between items-start text-[10px] font-mono text-cyan-400/90 bg-slate-950/70 p-2 rounded-lg border border-cyan-500/20">
+                            <div class="flex items-center gap-2">
+                                <span class="w-2 h-2 rounded-full bg-rose-500 animate-ping"></span>
+                                <span class="font-bold text-rose-400">LIVE FEED</span>
+                            </div>
+                            <div class="flex items-center gap-3">
+                                <span>ANGLE: <span id="hudAngle">0°</span></span>
+                                <span>SERVO: <span id="hudServoStatus">IDLE</span></span>
+                            </div>
+                        </div>
+                        <div class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 pointer-events-none flex items-center justify-center">
+                            <div class="w-20 h-20 border border-cyan-400/40 rounded-full flex items-center justify-center">
+                                <div class="w-10 h-10 border border-cyan-300/60 rounded-full"></div>
+                                <div class="absolute w-full h-[1px] bg-cyan-400/30"></div>
+                                <div class="absolute h-full w-[1px] bg-cyan-400/30"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="flex flex-wrap items-center justify-between gap-3 pt-1">
+                    <label class="flex items-center gap-2 text-xs text-slate-400">
+                        Dataset label
+                        <select id="captureLabel" class="bg-slate-800 border border-slate-700 text-slate-200 rounded px-2 py-1.5 text-xs focus:outline-none focus:border-cyan-500">
+                            <option>Stagnant Water</option>
+                            <option>Containers</option>
+                            <option>Tires</option>
+                            <option>Other</option>
+                        </select>
+                    </label>
+                    <button id="toggleCamBtn" onclick="toggleCamera()" class="px-3 py-1.5 bg-slate-800 border border-slate-700 text-slate-200 rounded-lg text-xs font-semibold flex items-center gap-1.5">
+                        <i data-lucide="video" class="w-3.5 h-3.5 text-cyan-400"></i>
+                        <span id="toggleCamBtnText">Start Camera</span>
+                    </button>
+                    <button id="captureBtn" onclick="captureSnapshot(document.getElementById('captureLabel').value)" disabled class="px-4 py-1.5 bg-gradient-to-r from-cyan-500 to-blue-500 text-slate-950 font-bold rounded-lg text-xs flex items-center gap-2 shadow-lg disabled:opacity-40">
+                        <i data-lucide="camera" class="w-4 h-4"></i>
+                        <span>Capture Photo</span>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Captured Images -->
+            <div class="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-xl space-y-3">
+                <div class="flex items-center justify-between pb-2 border-b border-slate-800">
+                    <div class="flex items-center space-x-2">
+                        <i data-lucide="images" class="w-4 h-4 text-cyan-400"></i>
+                        <span class="text-xs font-semibold text-slate-300 uppercase">Captured Images</span>
+                    </div>
+                    <span id="captureCount" class="text-xs font-mono text-slate-500">0 images</span>
+                </div>
+                <div class="flex items-center justify-between gap-3 text-xs">
+                    <span id="firebaseStatus" class="text-slate-500">Cloud storage not configured</span>
+                    <button onclick="uploadAllCaptures()" class="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 rounded-lg font-semibold flex items-center gap-1.5">
+                        <i data-lucide="cloud-upload" class="w-3.5 h-3.5"></i>
+                        Upload All
+                    </button>
+                </div>
+                <div class="max-h-80 overflow-auto custom-scrollbar">
+                    <table class="w-full text-left text-xs">
+                        <thead class="sticky top-0 z-10 bg-slate-900 text-[10px] uppercase tracking-wider text-slate-500 border-b border-slate-800">
+                            <tr>
+                                <th class="px-2 py-2 font-semibold">Preview</th>
+                                <th class="px-2 py-2 font-semibold">Label</th>
+                                <th class="px-2 py-2 font-semibold">AI Result</th>
+                                <th class="px-2 py-2 font-semibold">Captured</th>
+                                <th class="px-2 py-2 text-right font-semibold">Action</th>
+                            </tr>
+                        </thead>
+                        <tbody id="capturedImagesBody">
+                            <tr id="noCapturesRow">
+                                <td colspan="5" class="px-2 py-6 text-center text-slate-500">No captured images yet.</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- AI Scene Analysis -->
+            <div class="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-xl space-y-4">
+                <div class="flex items-center justify-between border-b border-slate-800 pb-2">
+                    <div class="flex items-center space-x-2">
+                        <i data-lucide="brain-circuit" class="w-4 h-4 text-cyan-400"></i>
+                        <span class="text-xs font-semibold text-slate-300 uppercase">AI Scene Analysis</span>
+                    </div>
+                    <span id="modelStatus" class="text-xs font-mono text-slate-500">MODEL NOT LOADED</span>
+                </div>
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <label class="text-xs text-slate-400 sm:col-span-2">
+                        Teachable Machine model URL
+                        <input id="modelUrlInput" type="url" placeholder="https://teachablemachine.withgoogle.com/models/your-model/" class="mt-1 w-full bg-slate-950 border border-slate-700 text-slate-200 rounded px-2 py-1.5 text-xs focus:outline-none focus:border-cyan-500">
+                    </label>
+                    <label class="text-xs text-slate-400">
+                        Minimum confidence
+                        <input id="confidenceInput" type="number" min="0.50" max="1" step="0.01" value="0.90" class="mt-1 w-full bg-slate-950 border border-slate-700 text-slate-200 rounded px-2 py-1.5 text-xs focus:outline-none focus:border-cyan-500">
+                    </label>
+                </div>
+                <div class="flex flex-wrap items-center gap-2">
+                    <button onclick="loadSceneModel()" class="px-3 py-1.5 bg-cyan-600 hover:bg-cyan-500 text-slate-950 font-bold rounded-lg text-xs flex items-center gap-1.5">
+                        <i data-lucide="download" class="w-3.5 h-3.5"></i> Load Model
+                    </button>
+                    <button id="classifyBtn" onclick="classifyCurrentFrame()" disabled class="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 rounded-lg text-xs flex items-center gap-1.5 disabled:opacity-40">
+                        <i data-lucide="scan-search" class="w-3.5 h-3.5"></i> Analyze Frame
+                    </button>
+                    <label class="flex items-center gap-2 text-xs text-slate-300">
+                        Decision mode
+                        <select id="decisionMode" onchange="updateDecisionMode()" class="bg-slate-800 border border-slate-700 text-slate-200 rounded px-2 py-1.5 text-xs focus:outline-none focus:border-cyan-500">
+                            <option value="human">Human Only</option>
+                            <option value="confirm">AI Suggestion + Confirm</option>
+                            <option value="auto">AI Auto-Trigger</option>
+                        </select>
+                    </label>
+                </div>
+                <div id="detectionResult" class="rounded-lg border border-slate-800 bg-slate-950/60 px-3 py-2 text-xs text-slate-400">
+                    No analysis yet. Load a model before using detection.
+                </div>
+                <button id="confirmTriggerBtn" onclick="confirmSuggestedTrigger()" hidden class="px-3 py-1.5 bg-rose-600 hover:bg-rose-500 text-white font-bold rounded-lg text-xs flex items-center gap-1.5">
+                    <i data-lucide="check-circle" class="w-3.5 h-3.5"></i> Confirm Trigger
+                </button>
+                <p id="decisionGuidance" class="text-[11px] text-slate-500">Human Only: AI analysis will not trigger the motor. The operator controls SPRAY NOW.</p>
+            </div>
+
+            <!-- Payload Release Trigger Card -->
+            <div class="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl relative overflow-hidden">
+                <div class="flex items-center justify-between mb-6">
+                    <div class="flex items-center space-x-2">
+                        <i data-lucide="zap" class="w-5 h-5 text-cyan-400"></i>
+                        <h2 class="text-base font-semibold text-slate-200">Payload Release Trigger</h2>
+                    </div>
+                    <span class="text-xs font-mono px-2 py-1 rounded bg-slate-800 text-slate-400">Auto Return (0° ← 180°)</span>
+                </div>
+
+                <div class="flex flex-col items-center justify-center py-6">
+                    <div class="relative flex items-center justify-center">
+                        <div id="sprayGlow" class="absolute inset-0 rounded-full bg-cyan-500/20 blur-xl opacity-0 transition-opacity"></div>
+                        <button id="sprayBtn" onclick="triggerSpraySequence()" disabled class="relative w-48 h-48 rounded-full bg-gradient-to-tr from-cyan-600 via-blue-600 to-cyan-400 text-slate-950 font-black text-2xl shadow-2xl border-4 border-cyan-300/40 flex flex-col items-center justify-center gap-2 transition-all hover:scale-105 active:scale-95 disabled:opacity-40">
+                            <i data-lucide="droplets" class="w-12 h-12 stroke-[2.5]"></i>
+                            <span>SPRAY NOW</span>
+                            <span id="btnDurationLabel" class="text-xs font-semibold px-2.5 py-0.5 rounded-full bg-slate-950/20 text-slate-900 font-mono">1000ms Pulse</span>
+                        </button>
+                    </div>
+
+                    <p id="safetyNotice" class="text-xs text-amber-400 font-medium mt-4 flex items-center gap-1.5">
+                        <i data-lucide="shield-alert" class="w-4 h-4"></i>
+                        <span>Arm system to enable trigger across all devices</span>
+                    </p>
+                    <button id="closeNowBtn" onclick="stopSpraySequence()" hidden class="mt-3 px-4 py-2 bg-rose-950 hover:bg-rose-900 border border-rose-700 text-rose-300 font-bold rounded-lg text-xs flex items-center gap-2">
+                        <i data-lucide="square" class="w-3.5 h-3.5"></i>
+                        <span>CLOSE NOW</span>
+                    </button>
+                </div>
+
+                <!-- Pulse Duration Slider -->
+                <div class="mt-6 pt-6 border-t border-slate-800 space-y-3">
+                    <div class="flex justify-between items-center text-xs">
+                        <label for="durationSlider" class="font-semibold text-slate-300 flex items-center gap-1.5">
+                            <i data-lucide="timer" class="w-4 h-4 text-cyan-400"></i> Spray Duration:
+                        </label>
+                        <span id="durationDisplay" class="font-mono text-cyan-400 font-bold text-sm">1000 ms</span>
+                    </div>
+                    <input id="durationSlider" type="range" min="200" max="10000" value="1000" step="100" oninput="updateDuration(this.value)" class="w-full h-2.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-cyan-400">
+                </div>
+
+                <!-- Gauge & Manual Controls -->
+                <div class="mt-6 pt-6 border-t border-slate-800 flex justify-center">
+                    <div class="flex flex-col items-center justify-center p-3 bg-slate-950/60 rounded-xl border border-slate-800">
+                        <div class="relative w-40 h-20 overflow-hidden flex items-end justify-center">
+                            <div class="w-40 h-40 border-[10px] border-slate-800 rounded-full border-b-transparent border-l-transparent -rotate-45 absolute top-0"></div>
+                            <div id="gaugeArc" class="w-40 h-40 border-[10px] border-cyan-500 rounded-full border-b-transparent border-l-transparent -rotate-45 absolute top-0 opacity-40"></div>
+                            <div class="text-center z-10 -mb-1">
+                                <span id="angleValueDisplay" class="text-2xl font-black text-slate-50 font-mono">0</span>
+                                <span class="text-sm font-bold text-cyan-400">°</span>
+                            </div>
+                            <div id="servoNeedle" class="servo-dial absolute bottom-0 w-1 h-16 bg-gradient-to-t from-cyan-500 to-rose-500 origin-bottom rounded-full" style="transform: rotate(-90deg);"></div>
+                        </div>
+                        <span class="text-[10px] text-slate-400 uppercase tracking-wider font-semibold mt-1">Target Servo Angle</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Telemetry Log -->
+            <div class="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-xl space-y-3">
+                <div class="flex items-center justify-between pb-2 border-b border-slate-800">
+                    <div class="flex items-center space-x-2">
+                        <i data-lucide="terminal" class="w-4 h-4 text-cyan-400"></i>
+                        <span class="text-xs font-semibold text-slate-300 uppercase">System Telemetry Log</span>
+                    </div>
+                    <button onclick="clearLogs()" class="text-xs text-slate-500 hover:text-slate-300">Clear</button>
+                </div>
+                <div id="consoleLog" class="h-32 overflow-y-auto font-mono text-xs space-y-1.5 custom-scrollbar pr-2">
+                    <div class="text-slate-500">[System] Real-time engine ready. Share Station ID to sync devices & stream video.</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Right Column: Instructions & Network Diagnostics (5 cols) -->
+        <div class="lg:col-span-5 space-y-6">
+            <div class="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl space-y-3">
+                <div class="flex items-center space-x-2 border-b border-slate-800 pb-2">
+                    <i data-lucide="wifi" class="w-5 h-5 text-cyan-400"></i>
+                    <h2 class="text-base font-semibold text-slate-200">Real-Time WebRTC Architecture</h2>
+                </div>
+                <ol class="text-xs text-slate-400 space-y-2.5 list-decimal list-inside">
+                    <li><strong class="text-slate-200">Host Station:</strong> Connect Arduino via USB to Device 1. Click <strong class="text-cyan-400">Start Camera</strong> to begin broadcasting local video feed.</li>
+                    <li><strong class="text-slate-200">Remote Clients:</strong> Open this page on any phone or laptop, paste the Host ID into the header bar, and click <strong class="text-cyan-400">Join</strong>.</li>
+                    <li><strong class="text-slate-200">Video Stream & Remote Control:</strong> Video feeds directly via WebRTC MediaStream, while control triggers & angles synchronize instantly across all devices.</li>
+                </ol>
+            </div>
+        </div>
+    </main>
+
+    <!-- Real-Time PeerJS JavaScript Engine with Media Streaming -->
+    <script>
+        // Global Application State
+        const state = {
+            isArmed: false,
+            angle: 0,
+            duration: 1000,
+            isSerialConnected: false,
+            isSpraying: false
+        };
+
+        // Web Serial API handles
+        let port = null;
+        let writer = null;
+
+        class CH340Port {
+            constructor(device) {
+                this.device = device;
+                this.outEndpoint = null;
+                this.interfaceNumber = null;
+            }
+
+            async controlOut(request, value, index) {
+                const result = await this.device.controlTransferOut({
+                    requestType: 'vendor',
+                    recipient: 'device',
+                    request,
+                    value,
+                    index
+                });
+                if (result.status !== 'ok') {
+                    throw new Error(`CH340 USB control request failed: ${result.status}`);
+                }
+            }
+
+            async controlIn(request, value, index, length) {
+                const result = await this.device.controlTransferIn({
+                    requestType: 'vendor',
+                    recipient: 'device',
+                    request,
+                    value,
+                    index
+                }, length);
+                if (result.status !== 'ok' || !result.data) {
+                    throw new Error(`CH340 USB status request failed: ${result.status}`);
+                }
+                return new Uint8Array(result.data.buffer, result.data.byteOffset, result.data.byteLength);
+            }
+
+            async open() {
+                await this.device.open();
+                if (!this.device.configuration) {
+                    await this.device.selectConfiguration(1);
+                }
+
+                const usbInterface = this.device.configuration.interfaces.find((candidate) => {
+                    return candidate.alternates.some((alternate) => {
+                        return alternate.endpoints.some((endpoint) => endpoint.type === 'bulk');
+                    });
+                });
+                if (!usbInterface) {
+                    throw new Error('No bulk USB interface found on the CH340 device.');
+                }
+
+                const alternate = usbInterface.alternates[0];
+                this.outEndpoint = alternate.endpoints.find((endpoint) => {
+                    return endpoint.type === 'bulk' && endpoint.direction === 'out';
+                });
+                if (!this.outEndpoint) {
+                    throw new Error('No CH340 USB output endpoint found.');
+                }
+
+                this.interfaceNumber = usbInterface.interfaceNumber;
+                await this.device.claimInterface(this.interfaceNumber);
+
+                await this.controlOut(0xA1, 0xC29C, 0xB2B9);
+                await this.controlOut(0xA4, 0x00DF, 0x0000);
+                await this.controlOut(0xA4, 0x009F, 0x0000);
+
+                const status = await this.controlIn(0x95, 0x0706, 0x0000, 2);
+                if (status[0] !== 0x9F || status[1] !== 0xEE) {
+                    throw new Error('CH340 status check failed during initialization.');
+                }
+
+                await this.controlOut(0x9A, 0x2727, 0x0000);
+                await this.controlOut(0x9A, 0x1312, 0xB282);
+                await this.controlOut(0x9A, 0x0F2C, 0x0008);
+                await this.controlOut(0x9A, 0x2518, 0x00C3);
+                await this.controlOut(0x9A, 0x2727, 0x0000);
+            }
+
+            async write(value) {
+                const data = new TextEncoder().encode(value);
+                const result = await this.device.transferOut(this.outEndpoint.endpointNumber, data);
+                if (result.status !== 'ok') {
+                    throw new Error(`CH340 USB write failed: ${result.status}`);
+                }
+            }
+
+            async close() {
+                if (this.interfaceNumber !== null) {
+                    await this.device.releaseInterface(this.interfaceNumber);
+                }
+                if (this.device.opened) {
+                    await this.device.close();
+                }
+            }
+        }
+
+        async function requestCH340Port() {
+            if (!navigator.usb) {
+                throw new Error('WebUSB is unavailable. Use Chrome on Android over HTTPS.');
+            }
+
+            const device = await navigator.usb.requestDevice({
+                filters: [
+                    { vendorId: 0x1A86, productId: 0x7523 },
+                    { vendorId: 0x1A86, productId: 0x7522 },
+                    { vendorId: 0x1A86, productId: 0x5523 },
+                    { vendorId: 0x2184, productId: 0x0057 },
+                    { vendorId: 0x4348, productId: 0x5523 },
+                    { vendorId: 0x9986, productId: 0x7523 }
+                ]
+            });
+            log(`USB device selected: VID 0x${device.vendorId.toString(16).padStart(4, '0')}, PID 0x${device.productId.toString(16).padStart(4, '0')}.`);
+            const ch340Port = new CH340Port(device);
+            try {
+                await ch340Port.open();
+                return ch340Port;
+            } catch (error) {
+                try {
+                    await ch340Port.close();
+                } catch (closeError) {
+                    console.warn('CH340 cleanup failed:', closeError);
+                }
+                throw error;
+            }
+        }
+
+        // PeerJS Network & Media handles
+        let peer = null;
+        let activeConnections = [];
+        let localStream = null;
+        let activeCalls = [];
+        let capturedImages = [];
+        let sprayTimer = null;
+        let activeSprayDuration = 0;
+        let sceneModel = null;
+        let lastDetection = null;
+        let pendingSuggestedDetection = null;
+        let captureDatabase = null;
+        let firebaseStorage = null;
+        let firebaseFirestore = null;
+
+        function initializeFirebase() {
+            const status = document.getElementById('firebaseStatus');
+            const config = window.DART_FIREBASE_CONFIG;
+            if (!config || !window.firebase) {
+                status.innerText = 'Cloud storage not configured';
+                return;
+            }
+
+            try {
+                const app = firebase.apps.length ? firebase.app() : firebase.initializeApp(config);
+                firebaseStorage = app.storage();
+                firebaseFirestore = app.firestore();
+                status.innerText = 'Firebase ready';
+            } catch (error) {
+                status.innerText = 'Firebase configuration error';
+                log(`Firebase initialization failed: ${error.message}`, 'warn');
+            }
+        }
+
+        async function uploadCapture(capture, button = null) {
+            if (!firebaseStorage || !firebaseFirestore) {
+                log('Configure Firebase before uploading captures.', 'warn');
+                document.getElementById('firebaseStatus').innerText = 'Configure Firebase to upload';
+                return;
+            }
+
+            try {
+                if (button) {
+                    button.disabled = true;
+                    button.innerHTML = '<i data-lucide="loader-circle" class="w-4 h-4 animate-spin"></i>';
+                    lucide.createIcons();
+                }
+
+                const imageBlob = await fetch(capture.dataUrl).then(response => response.blob());
+                const safeLabel = capture.label.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+                const filePath = `training-captures/${safeLabel}/${capture.id}.png`;
+                const fileRef = firebaseStorage.ref(filePath);
+                await fileRef.put(imageBlob, { contentType: 'image/png' });
+                const imageUrl = await fileRef.getDownloadURL();
+
+                await firebaseFirestore.collection('trainingCaptures').doc(String(capture.id)).set({
+                    imageUrl,
+                    storagePath: filePath,
+                    label: capture.label,
+                    capturedAt: capture.capturedAt,
+                    detection: capture.detection || null,
+                    userAgent: navigator.userAgent,
+                    uploadedAt: firebase.firestore.FieldValue.serverTimestamp()
+                }, { merge: true });
+
+                capture.firebaseUploaded = true;
+                capture.firebaseUrl = imageUrl;
+                document.getElementById('firebaseStatus').innerText = 'Last upload complete';
+                log(`Uploaded capture: ${capture.label}`, 'net');
+            } catch (error) {
+                log(`Firebase upload failed: ${error.message}`, 'warn');
+            } finally {
+                if (button) {
+                    button.disabled = false;
+                    button.innerHTML = '<i data-lucide="cloud-upload" class="w-4 h-4"></i>';
+                    lucide.createIcons();
+                }
+            }
+        }
+
+        async function uploadAllCaptures() {
+            if (!capturedImages.length) {
+                log('There are no captures to upload.', 'warn');
+                return;
+            }
+            for (const capture of capturedImages) {
+                if (!capture.firebaseUploaded) {
+                    await uploadCapture(capture);
+                }
+            }
+        }
+
+        function openCaptureDatabase() {
+            return new Promise((resolve, reject) => {
+                const request = indexedDB.open('dart-bti-captures', 1);
+                request.onupgradeneeded = () => {
+                    request.result.createObjectStore('captures', { keyPath: 'id', autoIncrement: true });
+                };
+                request.onsuccess = () => {
+                    captureDatabase = request.result;
+                    resolve(captureDatabase);
+                };
+                request.onerror = () => reject(request.error);
+            });
+        }
+
+        async function loadStoredCaptures() {
+            try {
+                const database = captureDatabase || await openCaptureDatabase();
+                const request = database.transaction('captures', 'readonly').objectStore('captures').getAll();
+                request.onsuccess = () => {
+                    capturedImages = request.result.reverse();
+                    renderCapturedImages();
+                };
+            } catch (error) {
+                log(`Capture storage unavailable: ${error.message}`, 'warn');
+            }
+        }
+
+        async function storeCapture(capture) {
+            try {
+                const database = captureDatabase || await openCaptureDatabase();
+                database.transaction('captures', 'readwrite').objectStore('captures').add(capture);
+            } catch (error) {
+                log(`Capture could not be stored: ${error.message}`, 'warn');
+            }
+        }
+
+        async function loadSceneModel() {
+            const modelUrl = document.getElementById('modelUrlInput').value.trim();
+            const status = document.getElementById('modelStatus');
+            if (!modelUrl) {
+                status.innerText = 'MODEL URL REQUIRED';
+                updateDetectionResult('Enter the Teachable Machine model URL first.', 'warn');
+                return;
+            }
+
+            try {
+                status.innerText = 'LOADING MODEL...';
+                const baseUrl = modelUrl.endsWith('/') ? modelUrl : `${modelUrl}/`;
+                sceneModel = await tmImage.load(`${baseUrl}model.json`, `${baseUrl}metadata.json`);
+                localStorage.setItem('dart-bti-model-url', modelUrl);
+                status.innerText = 'MODEL READY';
+                document.getElementById('classifyBtn').disabled = false;
+                updateDetectionResult(`Model ready with ${sceneModel.getTotalClasses()} classes.`, 'ready');
+            } catch (error) {
+                sceneModel = null;
+                status.innerText = 'MODEL LOAD FAILED';
+                updateDetectionResult(`Model load failed: ${error.message}`, 'warn');
+            }
+        }
+
+        function updateDetectionResult(message, type = 'info') {
+            const result = document.getElementById('detectionResult');
+            result.innerText = message;
+            result.className = type === 'positive'
+                ? 'rounded-lg border border-rose-700 bg-rose-950/50 px-3 py-2 text-xs text-rose-300'
+                : type === 'ready'
+                    ? 'rounded-lg border border-emerald-800 bg-emerald-950/40 px-3 py-2 text-xs text-emerald-300'
+                    : type === 'warn'
+                        ? 'rounded-lg border border-amber-800 bg-amber-950/40 px-3 py-2 text-xs text-amber-300'
+                        : 'rounded-lg border border-slate-800 bg-slate-950/60 px-3 py-2 text-xs text-slate-400';
+        }
+
+        function getDecisionMode() {
+            return document.getElementById('decisionMode').value;
+        }
+
+        function updateDecisionMode() {
+            const mode = getDecisionMode();
+            localStorage.setItem('dart-bti-decision-mode', mode);
+            pendingSuggestedDetection = null;
+            document.getElementById('confirmTriggerBtn').hidden = true;
+            const guidance = document.getElementById('decisionGuidance');
+            const messages = {
+                human: 'Human Only: AI analysis will not trigger the motor. The operator controls SPRAY NOW.',
+                confirm: 'AI Suggestion + Confirm: AI may suggest a trigger, but the operator must approve it.',
+                auto: 'AI Auto-Trigger: qualifying AI results may trigger the motor after arming and USB checks.'
+            };
+            guidance.innerText = messages[mode];
+            log(`Decision mode changed to ${messages[mode].split(':')[0]}.`);
+        }
+
+        async function classifyImage(source, capture = null) {
+            if (!sceneModel) {
+                updateDetectionResult('Load a Teachable Machine model before analyzing.', 'warn');
+                return null;
+            }
+
+            const predictions = await sceneModel.predict(source);
+            const bestPrediction = predictions.reduce((best, current) => {
+                return current.probability > best.probability ? current : best;
+            });
+            const threshold = Math.min(1, Math.max(0.5, Number(document.getElementById('confidenceInput').value) || 0.9));
+            const triggerLabels = ['stagnant water', 'containers', 'tires'];
+            const isTargetClass = triggerLabels.includes(bestPrediction.className.trim().toLowerCase());
+            const isPositive = isTargetClass && bestPrediction.probability >= threshold;
+            lastDetection = {
+                label: bestPrediction.className,
+                confidence: bestPrediction.probability,
+                isPositive,
+                analyzedAt: new Date()
+            };
+
+            if (capture) {
+                capture.detection = lastDetection;
+                await storeCapture(capture);
+                renderCapturedImages();
+            }
+
+            updateDetectionResult(`${bestPrediction.className}: ${(bestPrediction.probability * 100).toFixed(1)}% | ${isPositive ? 'TRIGGER CONDITION MET' : 'No trigger'}`, isPositive ? 'positive' : 'ready');
+            return lastDetection;
+        }
+
+        async function classifyCurrentFrame() {
+            const video = document.getElementById('webcamVideo');
+            if (video.classList.contains('hidden') || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
+                updateDetectionResult('Start the camera and wait for a live frame before analyzing.', 'warn');
+                return;
+            }
+
+            try {
+                const detection = await classifyImage(video);
+                if (getDecisionMode() !== 'human') {
+                    maybeTriggerFromDetection(detection);
+                }
+            } catch (error) {
+                updateDetectionResult(`Analysis failed: ${error.message}`, 'warn');
+            }
+        }
+
+        function maybeTriggerFromDetection(detection) {
+            const mode = getDecisionMode();
+            if (!detection?.isPositive || mode === 'human') return;
+
+            if (mode === 'confirm') {
+                pendingSuggestedDetection = detection;
+                document.getElementById('confirmTriggerBtn').hidden = false;
+                updateDetectionResult(`Trigger suggestion: ${detection.label} at ${(detection.confidence * 100).toFixed(1)}%. Awaiting human confirmation.`, 'positive');
+                lucide.createIcons();
+                return;
+            }
+
+            if (!state.isArmed) {
+                updateDetectionResult('Target condition detected, but trigger blocked: system is disarmed.', 'warn');
+                return;
+            }
+            if (!port && !writer) {
+                updateDetectionResult('Target condition detected, but trigger blocked: USB is not connected.', 'warn');
+                return;
+            }
+            triggerSpraySequence();
+        }
+
+        function confirmSuggestedTrigger() {
+            if (!pendingSuggestedDetection) return;
+            pendingSuggestedDetection = null;
+            document.getElementById('confirmTriggerBtn').hidden = true;
+            triggerSpraySequence();
+        }
+
+        function applySavedTheme() {
+            const lightMode = localStorage.getItem('dart-bti-theme') === 'light';
+            document.body.classList.toggle('light-mode', lightMode);
+            updateThemeButton(lightMode);
+        }
+
+        function updateThemeButton(lightMode) {
+            const button = document.getElementById('themeToggleBtn');
+            const icon = document.getElementById('themeToggleIcon');
+            if (!button || !icon) return;
+
+            icon.setAttribute('data-lucide', lightMode ? 'moon' : 'sun');
+            button.title = lightMode ? 'Switch to dark mode' : 'Switch to light mode';
+            lucide.createIcons();
+        }
+
+        function toggleTheme() {
+            const lightMode = !document.body.classList.contains('light-mode');
+            document.body.classList.toggle('light-mode', lightMode);
+            localStorage.setItem('dart-bti-theme', lightMode ? 'light' : 'dark');
+            updateThemeButton(lightMode);
+        }
+
+        // Initialize App & WebRTC Peer
+        window.addEventListener('load', () => {
+            lucide.createIcons();
+            applySavedTheme();
+            const savedModelUrl = localStorage.getItem('dart-bti-model-url');
+            if (savedModelUrl) {
+                document.getElementById('modelUrlInput').value = savedModelUrl;
+            }
+            const savedDecisionMode = localStorage.getItem('dart-bti-decision-mode');
+            if (savedDecisionMode && ['human', 'confirm', 'auto'].includes(savedDecisionMode)) {
+                document.getElementById('decisionMode').value = savedDecisionMode;
+            }
+            updateDecisionMode();
+            loadStoredCaptures();
+            initializeFirebase();
+            initPeerJS();
+        });
+
+        function log(msg, type = 'info') {
+            const consoleLog = document.getElementById('consoleLog');
+            const entry = document.createElement('div');
+            const timestamp = new Date().toLocaleTimeString();
+            
+            if (type === 'net') entry.className = 'text-cyan-400';
+            else if (type === 'warn') entry.className = 'text-amber-400';
+            else entry.className = 'text-slate-400';
+            
+            entry.innerText = `[${timestamp}] ${msg}`;
+            consoleLog.appendChild(entry);
+            consoleLog.scrollTop = consoleLog.scrollHeight;
+        }
+
+        // --- PEERJS REAL-TIME DATA & VIDEO LAYER ---
+
+        function initPeerJS() {
+            peer = new Peer();
+
+            peer.on('open', (id) => {
+                document.getElementById('myPeerId').innerText = id;
+                log(`Station Online. ID: ${id}`, 'net');
+            });
+
+            // Listen for incoming peer connections (Host Mode)
+            peer.on('connection', (conn) => {
+                log(`Device connected: ${conn.peer}`, 'net');
+                setupConnectionListeners(conn);
+                
+                // If camera is already live on Host when a client joins, stream video immediately
+                if (localStream) {
+                    callPeer(conn.peer);
+                }
+
+                // Immediately sync current state to new client
+                setTimeout(() => {
+                    conn.send({ type: 'FULL_SYNC', payload: state });
+                }, 500);
+            });
+
+            // CLIENT SIDE: Handle incoming Media Stream (Camera Feed from Host)
+            peer.on('call', (mediaCall) => {
+                log(`Receiving incoming video feed from ${mediaCall.peer}...`, 'net');
+                
+                // Answer call without sending a local stream back
+                mediaCall.answer();
+
+                mediaCall.on('stream', (remoteStream) => {
+                    const video = document.getElementById('webcamVideo');
+                    video.srcObject = remoteStream;
+                    
+                    // Show video & overlay on client device
+                    video.classList.remove('hidden');
+                    document.getElementById('cameraStandby').classList.add('hidden');
+                    document.getElementById('hudOverlay').classList.remove('hidden');
+                    document.getElementById('camStatusBadge').innerText = "LIVE STREAM";
+                    document.getElementById('camStatusBadge').className = "text-xs font-mono px-2 py-0.5 rounded bg-emerald-950 text-emerald-400 border border-emerald-800";
+                    document.getElementById('captureBtn').disabled = false;
+                    document.getElementById('toggleCamBtnText').innerText = "Disconnect Stream";
+                });
+
+                mediaCall.on('close', () => {
+                    log('Remote video stream ended.', 'warn');
+                    resetCameraUI();
+                });
+            });
+
+            peer.on('error', (err) => {
+                log(`Network error: ${err.type}`, 'warn');
+            });
+        }
+
+        function connectToHost() {
+            const hostId = document.getElementById('remotePeerIdInput').value.trim();
+            if (!hostId) return;
+
+            log(`Connecting to Station: ${hostId}...`, 'net');
+            const conn = peer.connect(hostId);
+            setupConnectionListeners(conn);
+        }
+
+        function setupConnectionListeners(conn) {
+            conn.on('open', () => {
+                if (!activeConnections.includes(conn)) {
+                    activeConnections.push(conn);
+                }
+                updateNetworkUI();
+                log(`Peer link established with ${conn.peer}`, 'net');
+            });
+
+            conn.on('data', (data) => {
+                handleRemoteAction(data);
+            });
+
+            conn.on('close', () => {
+                activeConnections = activeConnections.filter(c => c !== conn);
+                updateNetworkUI();
+                log(`Device disconnected: ${conn.peer}`, 'warn');
+            });
+        }
+
+        function callPeer(remotePeerId) {
+            if (!localStream || !peer) return;
+
+            log(`Initiating WebRTC video call to ${remotePeerId}...`, 'net');
+            const mediaCall = peer.call(remotePeerId, localStream);
+            activeCalls.push(mediaCall);
+
+            mediaCall.on('close', () => {
+                activeCalls = activeCalls.filter(c => c !== mediaCall);
+            });
+        }
+
+        function broadcast(actionType, payload) {
+            activeConnections.forEach(conn => {
+                if (conn.open) {
+                    conn.send({ type: actionType, payload: payload });
+                }
+            });
+        }
+
+        function handleRemoteAction(data) {
+            switch (data.type) {
+                case 'FULL_SYNC':
+                    Object.assign(state, data.payload);
+                    updateUIFromState();
+                    log('Full state synced from Host', 'net');
+                    break;
+                case 'TOGGLE_ARM':
+                    setArmingState(data.payload, false);
+                    break;
+                case 'SET_ANGLE':
+                    setAngleManual(data.payload, false);
+                    break;
+                case 'SET_DURATION':
+                    updateDuration(data.payload, false);
+                    break;
+                case 'TRIGGER_SPRAY':
+                    triggerSpraySequence(false);
+                    break;
+                case 'STOP_SPRAY':
+                    stopSpraySequence(false);
+                    break;
+            }
+        }
+
+        function updateNetworkUI() {
+            const dot = document.getElementById('netStatusDot');
+            const text = document.getElementById('netStatusText');
+            if (activeConnections.length > 0) {
+                dot.className = "w-2 h-2 rounded-full bg-emerald-500 animate-pulse";
+                text.innerText = `${activeConnections.length} Peer(s) Synced`;
+            } else {
+                dot.className = "w-2 h-2 rounded-full bg-slate-500";
+                text.innerText = "Standalone";
+            }
+        }
+
+        function copyPeerId() {
+            const id = document.getElementById('myPeerId').innerText;
+            if (id && id !== 'Connecting...') {
+                navigator.clipboard.writeText(id);
+                log('Station ID copied to clipboard!');
+            }
+        }
+
+        // --- CAMERA & WEBRTC VIDEO BROADCASTING ---
+
+        async function startCamera() {
+            try {
+                localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+                const video = document.getElementById('webcamVideo');
+                video.srcObject = localStream;
+                
+                video.classList.remove('hidden');
+                document.getElementById('cameraStandby').classList.add('hidden');
+                document.getElementById('hudOverlay').classList.remove('hidden');
+                document.getElementById('camStatusBadge').innerText = "ONLINE (STREAMING)";
+                document.getElementById('camStatusBadge').className = "text-xs font-mono px-2 py-0.5 rounded bg-emerald-950 text-emerald-400 border border-emerald-800";
+                document.getElementById('captureBtn').disabled = false;
+                document.getElementById('toggleCamBtnText').innerText = "Stop Camera";
+
+                // Broadcast stream to all connected remote clients
+                activeConnections.forEach(conn => {
+                    callPeer(conn.peer);
+                });
+
+                log('Camera live. Broadcasting video stream to connected peers...', 'net');
+            } catch (err) {
+                log(`Camera Error: ${err.message}`, 'warn');
+            }
+        }
+
+        function toggleCamera() {
+            if (localStream) {
+                localStream.getTracks().forEach(track => track.stop());
+                localStream = null;
+
+                activeCalls.forEach(call => call.close());
+                activeCalls = [];
+
+                resetCameraUI();
+                log('Camera stopped.');
+            } else {
+                startCamera();
+            }
+        }
+
+        function resetCameraUI() {
+            const video = document.getElementById('webcamVideo');
+            if (video.srcObject) {
+                video.srcObject = null;
+            }
+            video.classList.add('hidden');
+            document.getElementById('cameraStandby').classList.remove('hidden');
+            document.getElementById('hudOverlay').classList.add('hidden');
+            document.getElementById('camStatusBadge').innerText = "OFFLINE";
+            document.getElementById('camStatusBadge').className = "text-xs font-mono px-2 py-0.5 rounded bg-slate-800 text-slate-400";
+            document.getElementById('captureBtn').disabled = true;
+            document.getElementById('toggleCamBtnText').innerText = "Start Camera";
+        }
+
+        async function captureSnapshot(label) {
+            const video = document.getElementById('webcamVideo');
+            const canvas = document.getElementById('captureCanvas');
+            if (video.classList.contains('hidden') || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
+                log('Capture unavailable until the video feed is ready.', 'warn');
+                return;
+            }
+
+            if (!video.videoWidth || !video.videoHeight) {
+                log('Capture unavailable: video dimensions are not ready.', 'warn');
+                return;
+            }
+
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+            const capture = {
+                id: crypto.randomUUID(),
+                dataUrl: canvas.toDataURL('image/png'),
+                label,
+                capturedAt: new Date().toISOString()
+            };
+            capturedImages.unshift(capture);
+            renderCapturedImages();
+            log(`Frame Captured and stored: ${label}`);
+
+            if (getDecisionMode() !== 'human' && sceneModel) {
+                try {
+                    const detection = await classifyImage(video, capture);
+                    maybeTriggerFromDetection(detection);
+                } catch (error) {
+                    updateDetectionResult(`Analysis failed: ${error.message}`, 'warn');
+                }
+            } else {
+                await storeCapture(capture);
+            }
+        }
+
+        function renderCapturedImages() {
+            const body = document.getElementById('capturedImagesBody');
+            const count = document.getElementById('captureCount');
+            body.innerHTML = '';
+            count.innerText = `${capturedImages.length} image${capturedImages.length === 1 ? '' : 's'}`;
+
+            if (capturedImages.length === 0) {
+                body.innerHTML = '<tr><td colspan="5" class="px-2 py-6 text-center text-slate-500">No captured images yet.</td></tr>';
+                return;
+            }
+
+            capturedImages.forEach((capture, index) => {
+                const row = document.createElement('tr');
+                row.className = 'border-b border-slate-800/70 last:border-0';
+
+                const previewCell = document.createElement('td');
+                previewCell.className = 'px-2 py-2';
+                const preview = document.createElement('img');
+                preview.src = capture.dataUrl;
+                preview.alt = `${capture.label} aerial image`;
+                preview.className = 'w-20 h-12 object-cover rounded border border-slate-700';
+                previewCell.appendChild(preview);
+
+                const labelCell = document.createElement('td');
+                labelCell.className = 'px-2 py-2 text-slate-300';
+                labelCell.innerText = capture.label;
+
+                const resultCell = document.createElement('td');
+                resultCell.className = 'px-2 py-2 whitespace-nowrap';
+                if (capture.detection) {
+                    const confidence = `${(capture.detection.confidence * 100).toFixed(1)}%`;
+                    resultCell.innerText = `${capture.detection.label} (${confidence})`;
+                    resultCell.classList.add(capture.detection.isPositive ? 'text-rose-300' : 'text-emerald-300');
+                } else {
+                    resultCell.innerText = 'Not analyzed';
+                    resultCell.classList.add('text-slate-500');
+                }
+
+                const timeCell = document.createElement('td');
+                timeCell.className = 'px-2 py-2 text-slate-500 font-mono whitespace-nowrap';
+                timeCell.innerText = new Date(capture.capturedAt).toLocaleTimeString();
+
+                const actionCell = document.createElement('td');
+                actionCell.className = 'px-2 py-2 text-right';
+                const uploadButton = document.createElement('button');
+                uploadButton.type = 'button';
+                uploadButton.title = 'Upload to Firebase';
+                uploadButton.className = 'inline-flex p-1.5 text-emerald-400 hover:text-emerald-300';
+                uploadButton.innerHTML = '<i data-lucide="cloud-upload" class="w-4 h-4"></i>';
+                uploadButton.onclick = () => uploadCapture(capture, uploadButton);
+
+                const downloadLink = document.createElement('a');
+                downloadLink.href = capture.dataUrl;
+                downloadLink.download = `drone-capture-${index + 1}.png`;
+                downloadLink.title = 'Download image';
+                downloadLink.className = 'inline-flex p-1.5 text-cyan-400 hover:text-cyan-300';
+                downloadLink.innerHTML = '<i data-lucide="download" class="w-4 h-4"></i>';
+                actionCell.append(uploadButton, downloadLink);
+
+                row.append(previewCell, labelCell, resultCell, timeCell, actionCell);
+                body.appendChild(row);
+            });
+            lucide.createIcons();
+        }
+
+        // --- UI & ACTION CONTROL FUNCTIONS ---
+
+        function toggleArming() {
+            setArmingState(!state.isArmed, true);
+        }
+
+        function setArmingState(armed, shouldBroadcast = true) {
+            state.isArmed = armed;
+            if (!armed && state.isSpraying) {
+                stopSpraySequence(shouldBroadcast, 'System disarmed. Servo returned to closed.');
+            }
+            updateArmUI();
+            
+            if (shouldBroadcast) {
+                broadcast('TOGGLE_ARM', state.isArmed);
+            }
+        }
+
+        function updateArmUI() {
+            const btn = document.getElementById('armToggleBtn');
+            const text = document.getElementById('armText');
+            const icon = document.getElementById('armIcon');
+            const sprayBtn = document.getElementById('sprayBtn');
+            const notice = document.getElementById('safetyNotice');
+
+            if (state.isArmed) {
+                btn.className = "flex items-center space-x-2 px-3 py-1.5 rounded-xl border bg-rose-950/80 border-rose-700 text-rose-300 text-xs font-semibold transition-all hover:bg-rose-900";
+                text.innerText = "SYSTEM ARMED";
+                icon.setAttribute('data-lucide', 'shield-check');
+                sprayBtn.disabled = false;
+                notice.classList.add('hidden');
+                log('SAFETY DISENGAGED - System Armed!', 'warn');
+            } else {
+                btn.className = "flex items-center space-x-2 px-3 py-1.5 rounded-xl border bg-slate-800/80 border-slate-700 text-slate-300 text-xs font-semibold transition-all hover:bg-slate-700";
+                text.innerText = "SYSTEM DISARMED";
+                icon.setAttribute('data-lucide', 'shield-off');
+                sprayBtn.disabled = true;
+                notice.classList.remove('hidden');
+                log('System Disarmed.');
+            }
+            lucide.createIcons();
+        }
+
+        function updateDuration(val, shouldBroadcast = true) {
+            state.duration = parseInt(val);
+            document.getElementById('durationDisplay').innerText = `${state.duration} ms`;
+            document.getElementById('btnDurationLabel').innerText = `${state.duration}ms Pulse`;
+            document.getElementById('durationSlider').value = state.duration;
+            
+            if (shouldBroadcast) {
+                broadcast('SET_DURATION', state.duration);
+            }
+        }
+
+        function setAngleManual(angle, shouldBroadcast = true) {
+            state.angle = angle;
+            updateGaugeUI(angle);
+            
+            // Send command directly to USB hardware if connected
+            sendSerialCommand(`${angle}\n`);
+
+            if (shouldBroadcast) {
+                broadcast('SET_ANGLE', angle);
+            }
+        }
+
+        function updateGaugeUI(angle) {
+            document.getElementById('angleValueDisplay').innerText = angle;
+            document.getElementById('hudAngle').innerText = `${angle}°`;
+            document.getElementById('servoNeedle').style.transform = `rotate(${angle - 90}deg)`;
+        }
+
+        function triggerSpraySequence(shouldBroadcast = true) {
+            if (!state.isArmed || state.isSpraying) return;
+
+            state.isSpraying = true;
+            activeSprayDuration = state.duration;
+            log(`Triggering Spray Sequence (${activeSprayDuration}ms)...`, 'warn');
+
+            // The Arduino sketch accepts numeric angle commands.
+            setAngleManual(180, false);
+            document.getElementById('sprayGlow').style.opacity = '1';
+            document.getElementById('hudServoStatus').innerText = 'SPRAYING';
+            document.getElementById('closeNowBtn').hidden = false;
+            document.getElementById('durationSlider').disabled = true;
+            document.getElementById('sprayBtn').disabled = true;
+            document.getElementById('durationDisplay').innerText = `${activeSprayDuration} ms (active)`;
+
+            if (shouldBroadcast) {
+                broadcast('TRIGGER_SPRAY', null);
+            }
+
+            // Return to rest position after duration
+            sprayTimer = setTimeout(() => stopSpraySequence(true, 'Spray Sequence Complete - Servo at Rest (0°)'), activeSprayDuration);
+        }
+
+        function stopSpraySequence(shouldBroadcast = true, message = 'Spray stopped. Servo returned to closed.') {
+            if (!state.isSpraying) return;
+
+            if (sprayTimer) {
+                clearTimeout(sprayTimer);
+                sprayTimer = null;
+            }
+            state.isSpraying = false;
+            setAngleManual(0, false);
+            document.getElementById('sprayGlow').style.opacity = '0';
+            document.getElementById('hudServoStatus').innerText = 'IDLE';
+            document.getElementById('closeNowBtn').hidden = true;
+            document.getElementById('durationSlider').disabled = false;
+            document.getElementById('sprayBtn').disabled = !state.isArmed;
+            updateDuration(state.duration, false);
+            log(message, 'warn');
+
+            if (shouldBroadcast) {
+                broadcast('STOP_SPRAY', null);
+            }
+        }
+
+        function updateUIFromState() {
+            setArmingState(state.isArmed, false);
+            updateDuration(state.duration, false);
+            updateGaugeUI(state.angle);
+        }
+
+        // --- WEB SERIAL API HARDWARE BRIDGE ---
+
+        async function toggleConnection() {
+            if (port) {
+                await port.close();
+                port = null;
+                writer = null;
+                state.isSerialConnected = false;
+                document.getElementById('connectBtnText').innerText = "Connect USB";
+                log('Serial disconnected.');
+                return;
+            }
+
+            try {
+                const isAndroid = /Android/i.test(navigator.userAgent);
+                if (navigator.usb && (isAndroid || !navigator.serial)) {
+                    log('Using direct CH340 WebUSB driver.');
+                    port = await requestCH340Port();
+                } else {
+                    const serialApi = navigator.serial || await window.serialPolyfillReady;
+                    if (!serialApi) {
+                        throw new Error('Serial unavailable. Open this page over HTTPS in Chrome and enable USB/OTG access.');
+                    }
+
+                    log(navigator.serial ? 'Using native Web Serial.' : 'Using Web Serial Polyfill via WebUSB.');
+                    port = await serialApi.requestPort();
+                    await port.open({ baudRate: 9600 });
+
+                    const textEncoder = new TextEncoderStream();
+                    textEncoder.readable.pipeTo(port.writable);
+                    writer = textEncoder.writable.getWriter();
+                }
+                
+                state.isSerialConnected = true;
+                document.getElementById('connectBtnText').innerText = "Disconnect USB";
+                log('Arduino USB Connected successfully!', 'net');
+            } catch (err) {
+                const message = err.name === 'NotFoundError'
+                    ? 'No CH340 device selected. Check the OTG adapter, USB permission, and that the board is connected.'
+                    : err.message;
+                if (port) {
+                    try {
+                        await port.close();
+                    } catch (closeError) {
+                        console.warn('Serial cleanup failed:', closeError);
+                    }
+                }
+                port = null;
+                writer = null;
+                log(`Serial Connection Error: ${message}`, 'warn');
+            }
+        }
+
+        async function sendSerialCommand(cmd) {
+            if (writer) {
+                await writer.write(cmd);
+                log(`[Serial Tx] ${cmd.trim()}`);
+            } else if (port instanceof CH340Port) {
+                await port.write(cmd);
+                log(`[Serial Tx] ${cmd.trim()}`);
+            }
+        }
+
+        function clearLogs() {
+            document.getElementById('consoleLog').innerHTML = '';
+        }
+    </script>
+</body>
+</html>
